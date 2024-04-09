@@ -1,0 +1,460 @@
+```{r}
+# Import libraries
+library(ggplot2)
+library(patchwork)
+library(purrr)
+
+# Set ggplot theme
+theme_set(theme_bw())
+```
+
+## Setup
+```{r}
+# Fixed parameters
+n <- 25
+m <- 50
+
+phi_true <- 0
+theta_true <- 1
+s2z <- 4
+s2y <- 1
+
+# Simulated data
+Z <- rnorm(n, phi_true, sqrt(s2z))
+Y <- rnorm(m, phi_true + theta_true, sqrt(s2y))
+
+# Prior
+s2t <- 0.5 # 
+
+const <- list(
+  n = n,
+  m = m,
+  s2z = s2z,
+  s2y = s2y,
+  s2t = s2t
+)
+
+data <- list(
+  s2z = s2z,
+  s2y = s2y,
+  s2t = s2t,
+  Z = Z,
+  Y = Y
+)
+
+print(c(mean(Z), mean(Y)))
+```
+
+## Posterior of phi
+```{r}
+source("../src/lambda_eta.R")
+
+# Posterior variance of phi
+po_var_phi <- function(const, eta){
+  # Unpack the data
+  n <- const$n
+  m <- const$m
+  s2z <- const$s2z
+  s2y <- const$s2y
+  s2t <- const$s2t
+  
+  # Calculate and return the posterior variance of phi
+  (s2z/n) / (s2y/m + eta*(s2z/n + s2t)) * (s2y/m + eta*s2t)
+}
+
+# ELPD
+neg_elpd_phi <- function(eta, z, y, const){
+  # Unpack the data
+  n <- const$n
+  m <- const$m
+  s2z <- const$s2z
+  s2y <- const$s2y
+  s2t <- const$s2t
+  
+  # Calculate posterior mean and variance of phi
+  po_mean <- po_mean_phi(const, z, y, eta)
+  po_var <- po_var_phi(const, eta)
+  
+  # Calculate and return the expected log predictive density
+  # We will drop some constants
+  # 0.5 * (log(2*pi) + log(po_var + s2z) + s2z/(po_var + s2z) + (phi_true - po_mean)**2/(po_var + s2z))
+  log(po_var + s2z) + s2z/(po_var + s2z) + (phi_true - po_mean)**2/(po_var + s2z)
+}
+```
+
+### Plot the posterior
+```{r}
+zbar <- -0.1131528
+ybar <- 0.8716570
+
+# zbar <- 0.11
+# ybar <- -0.69
+
+eta <- seq(0, 1, 0.001)
+po_phi_mean <- po_mean_phi(const, zbar, ybar, eta)
+po_phi_var <- po_var_phi(const, eta)
+
+df_po_phi <- data.frame(eta = eta,
+                        po_phi_mean = po_phi_mean,
+                        po_phi_var = po_phi_var,
+                        po_phi_sd = sqrt(po_phi_var))
+
+plt_mean <- ggplot(df_po_phi, aes(eta, po_phi_mean)) +
+  geom_line(color = "#003f5c") +
+  geom_hline(yintercept = phi_true, linetype = "dashed") +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x = expression(eta),
+       y = expression(hat(varphi)[eta]))
+
+plt_var <- ggplot(df_po_phi, aes(eta, po_phi_var)) +
+  geom_line(color = "#bc5090") +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x = expression(eta),
+       y = expression(hat(sigma)[varphi][eta]^2))
+
+plt_ci <- ggplot(df_po_phi, aes(eta, po_phi_mean)) +
+  geom_line(color = "#ffa600") +
+  geom_hline(yintercept = phi_true, linetype = "dashed") +
+  scale_x_continuous(expand = c(0,0)) +
+  geom_ribbon(aes(ymin = po_phi_mean - po_phi_sd, ymax = po_phi_mean + po_phi_sd),
+              fill = "#ffa600",
+              alpha = 0.3) +
+  labs(x = expression(eta),
+       y = expression(hat(varphi)[eta]))
+
+plt_mean + plt_var + plt_ci + 
+  plot_annotation(
+    subtitle = bquote(paste(bar(x)[1], " = ", .(round(zbar, 2)), ", ", bar(x)[2], " = ", .(round(ybar, 2))))
+  ) &
+  theme(
+    plot.subtitle = element_text(size = 8),
+    axis.text = element_text(size = 6),
+    axis.title = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
+  )
+ggsave("posterior_phi_1.pdf", width = 16, height = 5, dpi = 300, units = "cm")
+```
+
+### Plot the ELPD between the true and posterior mean of phi
+```{r}
+elpd_phi <- function(x, eta, const) {
+  s2z <- const$s2z
+  phi_var <- po_var_phi(const, eta)
+  
+  -0.5*(log(s2z + phi_var) + s2z/(phi_var + s2z) + 1/(phi_var + s2z) * (x - phi_true)^2)
+}
+```
+
+```{r}
+x <- seq(-0.14, 0.1, 0.001)
+elpd1 <- elpd_phi(x, 0, const)
+elpd2 <- elpd_phi(x, 1, const)
+```
+
+```{r}
+# Base plot (The ELPD functions when eta = 0 and eta = 1)
+df_elpd <- data.frame(x = x, elpd1 = elpd1, elpd2 = elpd2)
+plt_base <- ggplot(df_elpd, aes(x = x)) +
+  geom_line(aes(y = elpd1), color = "#ffa600") +
+  geom_line(aes(y = elpd2), color = "#ffa600") +
+  geom_vline(xintercept = phi_true) +
+  geom_ribbon(aes(ymin = elpd1, ymax = elpd2), fill = "#ffa600", alpha = 0.3)
+
+plt_add_theme <- function(plt){
+  plt + labs(
+    x = expression(hat(varphi)),
+    y = "ELPD"
+  ) +
+  theme(
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+}
+```
+
+```{r}
+# Case 1: When the optimal value lies to the right of phi_1 (when both zbar and ybar are negative)
+zbar <- -0.1
+ybar <- 0.15
+phi01 <- po_mean_phi(const, zbar, ybar, 0)
+phi11 <- po_mean_phi(const, zbar, ybar, 1)
+x2 <- seq(phi01, phi11, length.out = 100)
+eta <- seq(0, 1, length.out = 100)
+elpd3 <- elpd_phi(x2, eta, const)
+df_interp <- data.frame(x = x2, y = elpd3)
+
+plt_case_1 <- plt_base + 
+  geom_rect(aes(xmin = phi_01, xmax = phi_11, ymin = -Inf, ymax = Inf),
+            fill = "#f1f1f1") +
+  geom_vline(xintercept = phi01, linetype = "dotted") + 
+  geom_vline(xintercept = phi11, linetype = "dotted") +
+  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
+  geom_point(x = phi11, y = elpd_phi(phi11, 1, const),
+             color = "#de425b",
+             fill = "white",
+             size = 2, shape = 21) +
+  scale_x_continuous(expand = c(0,0),
+                     breaks = c(phi01, phi11, 0),
+                     labels = c(expression(hat(varphi)[0]),
+                                expression(hat(varphi)[1]),
+                                expression(varphi^"*")))
+plt_case_1$layers <- c(plt_case_1$layers[[5]], plt_case_1$layers[-5])
+plt_case_1 <- plt_add_theme(plt_case_1)
+plt_case_1
+```
+
+```{r}
+# Case 2: When the optimal value lies between phi_0 and phi_1
+zbar <- -0.05
+ybar <- 0.3
+phi02 <- po_mean_phi(const, zbar, ybar, 0)
+phi12 <- po_mean_phi(const, zbar, ybar, 1)
+x2 <- seq(phi02, phi12, length.out = 100)
+eta <- seq(0, 1, length.out = 100)
+elpd3 <- elpd_phi(x2, eta, const)
+df_interp <- data.frame(x = x2, y = elpd3)
+
+plt_case_2 <- plt_base + 
+  geom_rect(aes(xmin = phi02, xmax = phi12, ymin = -Inf, ymax = Inf),
+            fill = "#f1f1f1") +
+  geom_vline(xintercept = phi02, linetype = "dotted") + 
+  geom_vline(xintercept = phi12, linetype = "dotted") +
+  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
+  geom_point(x = x2[which.max(elpd3)], y = max(elpd3),
+             color = "#de425b",
+             fill = "white",
+             size = 2, shape = 21) +
+  scale_x_continuous(expand = c(0,0),
+                     breaks = c(phi02, phi12, 0),
+                     labels = c(expression(hat(varphi)[0]),
+                                expression(hat(varphi)[1]),
+                                expression(varphi^"*")))
+plt_case_2$layers <- c(plt_case_2$layers[[5]], plt_case_2$layers[-5])
+plt_case_2 <- plt_add_theme(plt_case_2)
+plt_case_2
+```
+
+```{r}
+# Case 3: When the optimal value lies on phi_0
+zbar <- 0.02
+ybar <- 0.3
+phi03 <- po_mean_phi(const, zbar, ybar, 0)
+phi13 <- po_mean_phi(const, zbar, ybar, 1)
+x2 <- seq(phi03, phi13, length.out = 100)
+eta <- seq(0, 1, length.out = 100)
+elpd3 <- elpd_phi(x2, eta, const)
+df_interp <- data.frame(x = x2, y = elpd3)
+
+plt_case_3 <- plt_base + 
+  geom_rect(aes(xmin = phi03, xmax = phi13, ymin = -Inf, ymax = Inf),
+            fill = "#f1f1f1") +
+  geom_vline(xintercept = phi03, linetype = "dotted") + 
+  geom_vline(xintercept = phi13, linetype = "dotted") +
+  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
+  geom_point(x = x2[which.max(elpd3)], y = max(elpd3),
+             color = "#de425b",
+             fill = "white",
+             size = 2, shape = 21) +
+  scale_x_continuous(expand = c(0,0),
+                     breaks = c(phi03, phi13, 0),
+                     labels = c(expression(hat(varphi)[0]),
+                                expression(hat(varphi)[1]),
+                                expression(varphi^"*")))
+plt_case_3$layers <- c(plt_case_3$layers[[5]], plt_case_3$layers[-5])
+plt_case_3 <- plt_add_theme(plt_case_3)
+plt_case_3
+```
+
+```{r}
+plt_case_1 + plt_case_2 + plt_case_3 +
+  plot_layout(axis_titles = "collect") &
+  theme(
+    plot.subtitle = element_text(size = 8),
+    axis.text = element_text(size = 6),
+    axis.title = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
+  )
+ggsave("phi_optimal_illustrations.pdf", width = 16, height = 5, dpi = 300, units = "cm")
+```
+
+```{r}
+library(purrr)
+
+elpd_phi_2 <- function(eta, zbar, ybar, const) {
+  phi <- po_mean_phi(const, zbar, ybar, eta)
+  elpd_phi(phi, eta, const)
+}
+```
+
+```{r}
+zbar <- seq(-1, 1, 0.01)
+ybar <- seq(-1, 1, 0.01)
+grid <- as.matrix(expand.grid(zbar = zbar, ybar = ybar))
+
+eta_optim <- map2_dbl(grid[,1], grid[,2], ~{
+  optim(
+    par = 0.01,
+    fn = elpd_phi_2,
+    method = "L-BFGS-B",
+    zbar = .x,
+    ybar = .y,
+    const = const,
+    lower = 0,
+    upper = 1,
+    control = list(fnscale = -1, ndeps = 1e-4)
+  )$par
+})
+```
+
+```{r}
+df_eta_optim <- data.frame(zbar = grid[,1],
+                           ybar = grid[,2],
+                           eta = log10(ifelse(eta_optim == 0, min(eta_optim[eta_optim > 0]), eta_optim)))
+
+ggplot(df_eta_optim, aes(zbar, ybar, fill = eta)) +
+  geom_raster(interpolate = TRUE) +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_abline(intercept = 0, slope = 1) +
+  scale_x_continuous(expand = c(0,0)) +
+  scale_y_continuous(expand = c(0,0)) +
+  scale_fill_viridis_c() +
+  labs(x = expression(bar(x)[1]),
+       y = expression(bar(x)[2]),
+       fill = expression(log[10](eta))) + 
+  theme(aspect.ratio = 1)
+```
+
+## Inference for theta
+```{r}
+# Conditional mean of theta given phi
+theta_phi <- function(eta, zbar, ybar, const) {
+  m <- const$m
+  s2y <- const$s2y
+  s2t <- const$s2t
+  
+  rho <- s2y*s2t/(s2y/m + s2t)
+  rho*(1 - lambda(const, eta))*(ybar - zbar)
+}
+
+var_theta_phi <- function(const) {
+  m <- const$m
+  s2y <- const$s2y
+  s2t <- const$s2t
+  rho <- s2y*s2t/(s2y/m + s2t)
+  rho/m
+}
+
+# Test
+zbar <- -0.1131528
+ybar <- 0.8716570
+theta_phi(0, zbar, ybar, const) # Cut
+theta_phi(0.5, zbar, ybar, const) # SMI
+theta_phi(1, zbar, ybar, const) # Full
+```
+
+### Plot the posterior of theta
+```{r}
+eta <- seq(0, 1, length.out = 100)
+theta <- theta_phi(eta, zbar, ybar, const)
+var_theta <- var_theta_phi(const)
+
+df_theta <- data.frame(eta = eta,
+                       theta = theta,
+                       lower = theta - sqrt(var_theta),
+                       upper = theta + sqrt(var_theta))
+
+ggplot(df_theta, aes(eta, theta)) + 
+  geom_line(color = "#ffa600") +
+  geom_hline(yintercept = theta_true, linetype = "dashed") +
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill = "#ffa600",
+              alpha = 0.3) +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x = expression(eta),
+       y = bquote(paste(theta, "|", hat(varphi)[eta])),
+       subtitle = bquote(paste(bar(x)[1], " = ", .(round(zbar, 2)), ", ", bar(x)[2], " = ", .(round(ybar, 2))))) +
+  theme(
+    plot.subtitle = element_text(size = 8),
+    axis.text = element_text(size = 6),
+    axis.title = element_text(size = 8),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
+  )
+
+ggsave("posterior_theta_phi.pdf", width = 6, height = 5, dpi = 300, units = "cm")
+```
+
+### Plot the ELPD
+```{r}
+elpd_phi_theta <- function(x, eta, const) {
+  s2y <- const$s2y
+  po_var <- po_var_phi(const, eta) + var_theta_phi(const) + s2y
+  
+  -0.5*(log(2*pi) + log(po_var) + s2y/po_var + 1/po_var*(x - (phi_true + theta_true))^2)
+}
+```
+
+```{r}
+x <- seq(0.8, 1.2, length.out = 100)
+elpd1 <- elpd_phi_theta(x, 0, const)
+elpd2 <- elpd_phi_theta(x, 1, const)
+
+df_elpd_phi_theta <- data.frame(x = x, elpd1 = elpd1, elpd2 = elpd2)
+```
+
+```{r}
+plt_base <- ggplot(df_elpd_phi_theta, aes(x = x)) +
+  geom_line(aes(y = elpd1), color = "#ffa600") +
+  geom_line(aes(y = elpd2), color = "#ffa600") + 
+  geom_vline(xintercept = phi_true + theta_true) +
+  geom_ribbon(aes(ymin = elpd1, ymax = elpd2), fill = "#ffa600", alpha = 0.3)
+
+plt_add_theme <- function(plt){
+  plt + labs(
+    x = expression(hat(varphi)),
+    y = "ELPD"
+  ) +
+  theme(
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+}
+```
+
+```{r}
+zbar <- -0.3
+ybar <- 0.8
+
+theta_phi_0 <- theta_phi(0, zbar, ybar, const)
+theta_phi_1 <- theta_phi(1, zbar, ybar, const)
+x2 <- seq(theta_phi_0, theta_phi_1, length.out = 100)
+eta <- seq(0, 1, length.out = 100)
+elpd3 <- elpd_phi_theta(x2, eta, const)
+df_interp <- data.frame(x = x2, y = elpd3)
+
+plt_case_1 <- plt_base + 
+  geom_rect(aes(xmin = theta_phi_1, xmax = theta_phi_1, ymin = -Inf, ymax = Inf),
+            fill = "#f1f1f1") +
+  geom_vline(xintercept = theta_phi_0, linetype = "dotted") + 
+  geom_vline(xintercept = theta_phi_1, linetype = "dotted") +
+  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
+  #geom_point(x = theta_phi_0, y = elpd_phi(phi11, 1, const),
+  #           color = "#de425b",
+  #           fill = "white",
+  #           size = 2, shape = 21) +
+  scale_x_continuous(expand = c(0,0),
+                     breaks = c(theta_phi_0, theta_phi_1, 0),
+                     labels = c(expression(hat(varphi)[0]),
+                                expression(hat(varphi)[1]),
+                                expression(varphi^"*")))
+plt_case_1$layers <- c(plt_case_1$layers[[5]], plt_case_1$layers[-5])
+plt_case_1 <- plt_add_theme(plt_case_1)
+plt_case_1
+```
+
+

@@ -1,0 +1,124 @@
+```{r message=FALSE}
+library(mvtnorm)
+library(dplyr)
+library(ggplot2)
+```
+
+## Setup
+```{r}
+# Sample size
+N <- 25
+M <- 50
+
+# True population parameters
+PHI <- 0
+THETA <- 1
+SIGMA_Z <- 2
+SIGMA_Y <- 1
+
+# Prior parameters
+SIGMA_PHI <- 1
+SIGMA_THETA <- 0.5
+```
+
+## Simulate the data
+```{r}
+set.seed(123)
+Z <- rnorm(N, mean = PHI, sd = SIGMA_Z)
+Y <- rnorm(M, mean = PHI + THETA, sd = SIGMA_Y)
+
+# Initial scatterplot
+df <- rbind(data.frame(x = Z, var = "Z"),
+            data.frame(x = Y, var = "Y"))
+ggplot(df, aes(x)) +
+  geom_histogram(aes(fill = var), binwidth = 0.5) +
+  theme_minimal()
+```
+
+```{r}
+# Full posterior
+full_posterior <- function(n, m, Z, Y, sigma.z, sigma.y, sigma.phi, sigma.theta) {
+  # Precision matrix
+  P <- matrix(NA, 2, 2)
+  P[1,1] <- n/sigma.z**2 + m/sigma.y**2 + 1/sigma.phi**2
+  P[1,2] <- P[2,1] <- m/sigma.y**2
+  P[2,2] <- m/sigma.y**2 + 1/sigma.theta**2
+  
+  # Covariance matrix
+  S <- solve(P)
+
+  # Mean
+  tmp <- matrix(NA, 2, 1)
+  mu <- S %*% c(sum(Z)/sigma.z**2 + sum(Y)/sigma.y**2, sum(Y)/sigma.y**2)
+  
+  return(list(mean = mu, covariance = S))
+}
+
+po_full <- full_posterior(N, M, Z, Y,
+                          SIGMA_Z,
+                          SIGMA_Y,
+                          SIGMA_PHI,
+                          SIGMA_THETA)
+```
+
+```{r}
+# Cut posterior
+cut_posterior <- function(n, m, Z, Y, sigma.z, sigma.y, sigma.phi, sigma.theta) {
+  # Precision matrix
+  P <- matrix(NA, 2, 2)
+  P[1,1] <- n/sigma.z**2 + m/sigma.y**2 + 1/sigma.phi**2 - m/(m*sigma.theta**2 + sigma.y**2)
+  P[1,2] <- P[2,1] <- m/sigma.y**2
+  P[2,2] <- m/sigma.y**2 + 1/sigma.theta**2
+  
+  # Covariance matrix
+  S <- solve(P)
+
+  # Mean
+  tmp <- matrix(NA, 2, 1)
+  mu <- S %*% c(sum(Z)/sigma.z**2 + sum(Y)/sigma.y**2 - m/(m*sigma.theta**2 + sigma.y**2),
+                sum(Y)/sigma.y**2)
+  
+  return(list(mean = mu, covariance = S))
+}
+
+po_cut <- cut_posterior(N, M, Z, Y,
+                        SIGMA_Z,
+                        SIGMA_Y,
+                        SIGMA_PHI,
+                        SIGMA_THETA)
+```
+
+```{r}
+phi <- seq(-1.5, 1.5, 0.01)
+theta <- seq(0, 2, 0.01)
+sample_grid <- expand.grid(phi = phi, theta = theta)
+
+d_full <- mvtnorm::dmvnorm(sample_grid,
+                           mean = po_full$mean,
+                           sigma = po_full$covariance)
+d_cut <- mvtnorm::dmvnorm(sample_grid,
+                          mean = po_cut$mean,
+                          sigma = po_cut$covariance)
+
+df_full <- sample_grid
+df_full$z <- d_full
+df_full$type <- "full"
+
+df_cut <- sample_grid
+df_cut$z <- d_cut
+df_cut$type <- "cut"
+
+df_po_density <- rbind(df_full, df_cut)
+
+ggplot(df_po_density, aes(phi, theta, z = z, color = type)) + 
+  geom_contour(bins = 5) +
+  geom_point(aes(x = 0, y = 1), color = 2, size = 3, shape = 4) +
+  geom_point(aes(x = po_cut$mean[1], y = po_cut$mean[2]), size = 3, color = "#003f5c") +
+  geom_point(aes(x = po_full$mean[1], y = po_full$mean[2]), size = 3, color = "#ffa600") +
+  labs(x = expression(varphi), y = expression(theta), type = "posterior") +
+  scale_color_manual(values = c("#003f5c", "#ffa600")) +
+  theme_minimal() +
+  theme(aspect.ratio = 1)
+```
+
+
