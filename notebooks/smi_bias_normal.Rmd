@@ -1,460 +1,277 @@
-```{r}
+```{r message=FALSE}
 # Import libraries
+library(tidyverse)
 library(ggplot2)
+library(devtools)
 library(patchwork)
 library(purrr)
+library(numDeriv)
+library(calculus)
+library(mvtnorm)
+load_all()
 
 # Set ggplot theme
 theme_set(theme_bw())
 ```
 
 ## Setup
+
 ```{r}
 # Fixed parameters
-n <- 25
-m <- 50
-
-phi_true <- 0
-theta_true <- 1
-s2z <- 4
-s2y <- 1
-
-# Simulated data
-Z <- rnorm(n, phi_true, sqrt(s2z))
-Y <- rnorm(m, phi_true + theta_true, sqrt(s2y))
+n <- 25; m <- 50; 
+phi_true <- 0; theta_true <- 1;
+s2z <- 4; s2y <- 1;
 
 # Prior
-s2t <- 0.5 # 
+s2t <- 0.5
 
-const <- list(
-  n = n,
-  m = m,
-  s2z = s2z,
-  s2y = s2y,
-  s2t = s2t
-)
-
-data <- list(
-  s2z = s2z,
-  s2y = s2y,
-  s2t = s2t,
-  Z = Z,
-  Y = Y
-)
-
-print(c(mean(Z), mean(Y)))
+const <- list(n = n,
+              m = m,
+              s2z = s2z,
+              s2y = s2y,
+              s2t = s2t)
 ```
 
-## Posterior of phi
-```{r}
-source("../src/lambda_eta.R")
+## Analysis for $\varphi$
 
-# Posterior variance of phi
-po_var_phi <- function(const, eta){
-  # Unpack the data
-  n <- const$n
-  m <- const$m
-  s2z <- const$s2z
-  s2y <- const$s2y
-  s2t <- const$s2t
-  
-  # Calculate and return the posterior variance of phi
-  (s2z/n) / (s2y/m + eta*(s2z/n + s2t)) * (s2y/m + eta*s2t)
-}
+For a specific pair of $\bar{x}_1$ and $\bar{x}_2$, plot the posterior mean of $\varphi$ and $\sigma^2_{\varphi}$ as a function of $\eta$.
 
-# ELPD
-neg_elpd_phi <- function(eta, z, y, const){
-  # Unpack the data
-  n <- const$n
-  m <- const$m
-  s2z <- const$s2z
-  s2y <- const$s2y
-  s2t <- const$s2t
-  
-  # Calculate posterior mean and variance of phi
-  po_mean <- po_mean_phi(const, z, y, eta)
-  po_var <- po_var_phi(const, eta)
-  
-  # Calculate and return the expected log predictive density
-  # We will drop some constants
-  # 0.5 * (log(2*pi) + log(po_var + s2z) + s2z/(po_var + s2z) + (phi_true - po_mean)**2/(po_var + s2z))
-  log(po_var + s2z) + s2z/(po_var + s2z) + (phi_true - po_mean)**2/(po_var + s2z)
-}
+```{r fig.align = "center"}
+knitr::include_graphics("../figures/posterior_phi.png")
 ```
 
-### Plot the posterior
-```{r}
-zbar <- -0.1131528
-ybar <- 0.8716570
+### ELPD and optimal $\eta$
 
-# zbar <- 0.11
-# ybar <- -0.69
+Plot the envelope of the ELPD and the curve as we vary $\eta$.
 
-eta <- seq(0, 1, 0.001)
-po_phi_mean <- po_mean_phi(const, zbar, ybar, eta)
-po_phi_var <- po_var_phi(const, eta)
-
-df_po_phi <- data.frame(eta = eta,
-                        po_phi_mean = po_phi_mean,
-                        po_phi_var = po_phi_var,
-                        po_phi_sd = sqrt(po_phi_var))
-
-plt_mean <- ggplot(df_po_phi, aes(eta, po_phi_mean)) +
-  geom_line(color = "#003f5c") +
-  geom_hline(yintercept = phi_true, linetype = "dashed") +
-  scale_x_continuous(expand = c(0,0)) +
-  labs(x = expression(eta),
-       y = expression(hat(varphi)[eta]))
-
-plt_var <- ggplot(df_po_phi, aes(eta, po_phi_var)) +
-  geom_line(color = "#bc5090") +
-  scale_x_continuous(expand = c(0,0)) +
-  labs(x = expression(eta),
-       y = expression(hat(sigma)[varphi][eta]^2))
-
-plt_ci <- ggplot(df_po_phi, aes(eta, po_phi_mean)) +
-  geom_line(color = "#ffa600") +
-  geom_hline(yintercept = phi_true, linetype = "dashed") +
-  scale_x_continuous(expand = c(0,0)) +
-  geom_ribbon(aes(ymin = po_phi_mean - po_phi_sd, ymax = po_phi_mean + po_phi_sd),
-              fill = "#ffa600",
-              alpha = 0.3) +
-  labs(x = expression(eta),
-       y = expression(hat(varphi)[eta]))
-
-plt_mean + plt_var + plt_ci + 
-  plot_annotation(
-    subtitle = bquote(paste(bar(x)[1], " = ", .(round(zbar, 2)), ", ", bar(x)[2], " = ", .(round(ybar, 2))))
-  ) &
-  theme(
-    plot.subtitle = element_text(size = 8),
-    axis.text = element_text(size = 6),
-    axis.title = element_text(size = 8),
-    panel.grid.minor = element_blank(),
-    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
-  )
-ggsave("posterior_phi_1.pdf", width = 16, height = 5, dpi = 300, units = "cm")
+```{r fig.align = "center"}
+knitr::include_graphics("../figures/optim_elpd_phi_cases.png")
 ```
 
-### Plot the ELPD between the true and posterior mean of phi
-```{r}
-elpd_phi <- function(x, eta, const) {
-  s2z <- const$s2z
-  phi_var <- po_var_phi(const, eta)
-  
-  -0.5*(log(s2z + phi_var) + s2z/(phi_var + s2z) + 1/(phi_var + s2z) * (x - phi_true)^2)
-}
-```
+Numerical differentiation of ELPD
 
 ```{r}
-x <- seq(-0.14, 0.1, 0.001)
-elpd1 <- elpd_phi(x, 0, const)
-elpd2 <- elpd_phi(x, 1, const)
-```
+# The points at which the derivatives are to be evaluated
+x <- seq(0, 1, length.out = 300)
 
-```{r}
-# Base plot (The ELPD functions when eta = 0 and eta = 1)
-df_elpd <- data.frame(x = x, elpd1 = elpd1, elpd2 = elpd2)
-plt_base <- ggplot(df_elpd, aes(x = x)) +
-  geom_line(aes(y = elpd1), color = "#ffa600") +
-  geom_line(aes(y = elpd2), color = "#ffa600") +
-  geom_vline(xintercept = phi_true) +
-  geom_ribbon(aes(ymin = elpd1, ymax = elpd2), fill = "#ffa600", alpha = 0.3)
-
-plt_add_theme <- function(plt){
-  plt + labs(
-    x = expression(hat(varphi)),
-    y = "ELPD"
-  ) +
-  theme(
-    axis.text.y = element_blank(),
-    panel.grid = element_blank(),
-    axis.ticks.y = element_blank()
-  )
-}
-```
-
-```{r}
-# Case 1: When the optimal value lies to the right of phi_1 (when both zbar and ybar are negative)
-zbar <- -0.1
-ybar <- 0.15
-phi01 <- po_mean_phi(const, zbar, ybar, 0)
-phi11 <- po_mean_phi(const, zbar, ybar, 1)
-x2 <- seq(phi01, phi11, length.out = 100)
-eta <- seq(0, 1, length.out = 100)
-elpd3 <- elpd_phi(x2, eta, const)
-df_interp <- data.frame(x = x2, y = elpd3)
-
-plt_case_1 <- plt_base + 
-  geom_rect(aes(xmin = phi_01, xmax = phi_11, ymin = -Inf, ymax = Inf),
-            fill = "#f1f1f1") +
-  geom_vline(xintercept = phi01, linetype = "dotted") + 
-  geom_vline(xintercept = phi11, linetype = "dotted") +
-  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
-  geom_point(x = phi11, y = elpd_phi(phi11, 1, const),
-             color = "#de425b",
-             fill = "white",
-             size = 2, shape = 21) +
-  scale_x_continuous(expand = c(0,0),
-                     breaks = c(phi01, phi11, 0),
-                     labels = c(expression(hat(varphi)[0]),
-                                expression(hat(varphi)[1]),
-                                expression(varphi^"*")))
-plt_case_1$layers <- c(plt_case_1$layers[[5]], plt_case_1$layers[-5])
-plt_case_1 <- plt_add_theme(plt_case_1)
-plt_case_1
-```
-
-```{r}
-# Case 2: When the optimal value lies between phi_0 and phi_1
-zbar <- -0.05
-ybar <- 0.3
-phi02 <- po_mean_phi(const, zbar, ybar, 0)
-phi12 <- po_mean_phi(const, zbar, ybar, 1)
-x2 <- seq(phi02, phi12, length.out = 100)
-eta <- seq(0, 1, length.out = 100)
-elpd3 <- elpd_phi(x2, eta, const)
-df_interp <- data.frame(x = x2, y = elpd3)
-
-plt_case_2 <- plt_base + 
-  geom_rect(aes(xmin = phi02, xmax = phi12, ymin = -Inf, ymax = Inf),
-            fill = "#f1f1f1") +
-  geom_vline(xintercept = phi02, linetype = "dotted") + 
-  geom_vline(xintercept = phi12, linetype = "dotted") +
-  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
-  geom_point(x = x2[which.max(elpd3)], y = max(elpd3),
-             color = "#de425b",
-             fill = "white",
-             size = 2, shape = 21) +
-  scale_x_continuous(expand = c(0,0),
-                     breaks = c(phi02, phi12, 0),
-                     labels = c(expression(hat(varphi)[0]),
-                                expression(hat(varphi)[1]),
-                                expression(varphi^"*")))
-plt_case_2$layers <- c(plt_case_2$layers[[5]], plt_case_2$layers[-5])
-plt_case_2 <- plt_add_theme(plt_case_2)
-plt_case_2
-```
-
-```{r}
-# Case 3: When the optimal value lies on phi_0
-zbar <- 0.02
-ybar <- 0.3
-phi03 <- po_mean_phi(const, zbar, ybar, 0)
-phi13 <- po_mean_phi(const, zbar, ybar, 1)
-x2 <- seq(phi03, phi13, length.out = 100)
-eta <- seq(0, 1, length.out = 100)
-elpd3 <- elpd_phi(x2, eta, const)
-df_interp <- data.frame(x = x2, y = elpd3)
-
-plt_case_3 <- plt_base + 
-  geom_rect(aes(xmin = phi03, xmax = phi13, ymin = -Inf, ymax = Inf),
-            fill = "#f1f1f1") +
-  geom_vline(xintercept = phi03, linetype = "dotted") + 
-  geom_vline(xintercept = phi13, linetype = "dotted") +
-  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
-  geom_point(x = x2[which.max(elpd3)], y = max(elpd3),
-             color = "#de425b",
-             fill = "white",
-             size = 2, shape = 21) +
-  scale_x_continuous(expand = c(0,0),
-                     breaks = c(phi03, phi13, 0),
-                     labels = c(expression(hat(varphi)[0]),
-                                expression(hat(varphi)[1]),
-                                expression(varphi^"*")))
-plt_case_3$layers <- c(plt_case_3$layers[[5]], plt_case_3$layers[-5])
-plt_case_3 <- plt_add_theme(plt_case_3)
-plt_case_3
-```
-
-```{r}
-plt_case_1 + plt_case_2 + plt_case_3 +
-  plot_layout(axis_titles = "collect") &
-  theme(
-    plot.subtitle = element_text(size = 8),
-    axis.text = element_text(size = 6),
-    axis.title = element_text(size = 8),
-    panel.grid.minor = element_blank(),
-    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
-  )
-ggsave("phi_optimal_illustrations.pdf", width = 16, height = 5, dpi = 300, units = "cm")
-```
-
-```{r}
-library(purrr)
-
-elpd_phi_2 <- function(eta, zbar, ybar, const) {
-  phi <- po_mean_phi(const, zbar, ybar, eta)
-  elpd_phi(phi, eta, const)
-}
-```
-
-```{r}
-zbar <- seq(-1, 1, 0.01)
-ybar <- seq(-1, 1, 0.01)
-grid <- as.matrix(expand.grid(zbar = zbar, ybar = ybar))
-
-eta_optim <- map2_dbl(grid[,1], grid[,2], ~{
-  optim(
-    par = 0.01,
-    fn = elpd_phi_2,
-    method = "L-BFGS-B",
-    zbar = .x,
-    ybar = .y,
-    const = const,
-    lower = 0,
-    upper = 1,
-    control = list(fnscale = -1, ndeps = 1e-4)
-  )$par
+# The numerical differentiation
+y <- sapply(x, function(x) {
+  calculus::derivative(elpd_phi_2,
+                       var = c(eta = x),
+                       params = list(x1 = -0.05, x2 = 0.3, const = const),
+                       accuracy = 5,
+                       stepsize = 1e-10,
+                       order = 1)
 })
 ```
 
-```{r}
-df_eta_optim <- data.frame(zbar = grid[,1],
-                           ybar = grid[,2],
-                           eta = log10(ifelse(eta_optim == 0, min(eta_optim[eta_optim > 0]), eta_optim)))
+### Grid evaluation for the optimal eta
 
-ggplot(df_eta_optim, aes(zbar, ybar, fill = eta)) +
-  geom_raster(interpolate = TRUE) +
-  geom_vline(xintercept = 0, linetype = "dotted") +
-  geom_hline(yintercept = 0, linetype = "dotted") +
-  geom_abline(intercept = 0, slope = 1) +
-  scale_x_continuous(expand = c(0,0)) +
-  scale_y_continuous(expand = c(0,0)) +
-  scale_fill_viridis_c() +
-  labs(x = expression(bar(x)[1]),
-       y = expression(bar(x)[2]),
-       fill = expression(log[10](eta))) + 
-  theme(aspect.ratio = 1)
+To execute grid search for the first dataset
+
+```{bash}
+Rscript scripts/grid_search_phi.R -c "config_original"
 ```
 
-## Inference for theta
-```{r}
-# Conditional mean of theta given phi
-theta_phi <- function(eta, zbar, ybar, const) {
-  m <- const$m
-  s2y <- const$s2y
-  s2t <- const$s2t
-  
-  rho <- s2y*s2t/(s2y/m + s2t)
-  rho*(1 - lambda(const, eta))*(ybar - zbar)
-}
+To execute the grid search for the second dataset
 
-var_theta_phi <- function(const) {
-  m <- const$m
-  s2y <- const$s2y
-  s2t <- const$s2t
-  rho <- s2y*s2t/(s2y/m + s2t)
-  rho/m
-}
-
-# Test
-zbar <- -0.1131528
-ybar <- 0.8716570
-theta_phi(0, zbar, ybar, const) # Cut
-theta_phi(0.5, zbar, ybar, const) # SMI
-theta_phi(1, zbar, ybar, const) # Full
+```{bash}
+Rscript scripts/grid_search_phi_theta.R -c "config_original"
 ```
 
-### Plot the posterior of theta
+Plot the heatmap for the optimal $\eta$ for the first dataset
+
 ```{r}
-eta <- seq(0, 1, length.out = 100)
-theta <- theta_phi(eta, zbar, ybar, const)
-var_theta <- var_theta_phi(const)
-
-df_theta <- data.frame(eta = eta,
-                       theta = theta,
-                       lower = theta - sqrt(var_theta),
-                       upper = theta + sqrt(var_theta))
-
-ggplot(df_theta, aes(eta, theta)) + 
-  geom_line(color = "#ffa600") +
-  geom_hline(yintercept = theta_true, linetype = "dashed") +
-  geom_ribbon(aes(ymin = lower, ymax = upper),
-              fill = "#ffa600",
-              alpha = 0.3) +
-  scale_x_continuous(expand = c(0,0)) +
-  labs(x = expression(eta),
-       y = bquote(paste(theta, "|", hat(varphi)[eta])),
-       subtitle = bquote(paste(bar(x)[1], " = ", .(round(zbar, 2)), ", ", bar(x)[2], " = ", .(round(ybar, 2))))) +
-  theme(
-    plot.subtitle = element_text(size = 8),
-    axis.text = element_text(size = 6),
-    axis.title = element_text(size = 8),
-    panel.grid.minor = element_blank(),
-    plot.margin = margin(0.1, 0.1, 0.1, 0.1, "cm")
-  )
-
-ggsave("posterior_theta_phi.pdf", width = 6, height = 5, dpi = 300, units = "cm")
-```
-
-### Plot the ELPD
-```{r}
-elpd_phi_theta <- function(x, eta, const) {
-  s2y <- const$s2y
-  po_var <- po_var_phi(const, eta) + var_theta_phi(const) + s2y
-  
-  -0.5*(log(2*pi) + log(po_var) + s2y/po_var + 1/po_var*(x - (phi_true + theta_true))^2)
-}
+knitr::include_graphics("../figures/optim_eta_heatmap_phi.png")
 ```
 
 ```{r}
-x <- seq(0.8, 1.2, length.out = 100)
-elpd1 <- elpd_phi_theta(x, 0, const)
-elpd2 <- elpd_phi_theta(x, 1, const)
+df_eta_optim_phi <- readRDS("../results/optim_eta_1_original.rds")
+```
 
-df_elpd_phi_theta <- data.frame(x = x, elpd1 = elpd1, elpd2 = elpd2)
+### Calculate the probability of eta between 0 and 1
+
+```{r}
+fnames <- list.files("../results/", pattern = "optim_eta_1")
+df_eta_optim_phi <- map_dfr(fnames, ~{
+  exp_name <- stringr::str_remove(strsplit(.x, "_")[[1]][4], ".rds")
+  fpath <- file.path("../results", .x)
+  df <- readRDS(fpath)
+  df$exp_name <- exp_name
+  return(df)
+})
+
+df_eta_optim_phi <- df_eta_optim_phi %>%
+  mutate(
+    dx1 = dnorm(x1, mean = 0, sd = sqrt(4/n)),
+    dx2 = dnorm(x2, mean = 1, sd = sqrt(1/m)),
+    djoint = dx1 * dx2,
+    pref_mod = ifelse(eta == 0, "full",
+                      ifelse(eta > -3.3010, "smi", "cut"))
+  ) %>%
+  group_by(exp_name) %>%
+  mutate(djoint_adj = djoint / sum(djoint)) %>%
+  ungroup()
+
+df_eta_optim_sum_1 <- df_eta_optim_phi %>%
+  group_by(exp_name, pref_mod) %>%
+  summarise(prob = sum(djoint_adj) * 100) %>%
+  ungroup() %>%
+  mutate(
+    s2t = case_when(
+      exp_name == "none" ~ 1,
+      exp_name == "original" ~ 0.5,
+      exp_name == "moderate" ~ 0.3,
+      exp_name == "strong" ~ 0.1,
+      exp_name == "extreme" ~ 0.01
+    ),
+    prob = round(prob, 2)
+  ) %>%
+  pivot_wider(names_from = pref_mod, values_from = prob) %>%
+  arrange(desc(s2t))
+```
+
+## Analysis for $theta$
+
+We begin by plotting the posterior mean of $\theta | \hat\varphi_\eta$ and $\hat\varphi_\eta \theta | \hat\varphi_\eta$.
+
+```{r}
+knitr::include_graphics("../figures/posterior_phi_theta.png")
 ```
 
 ```{r}
-plt_base <- ggplot(df_elpd_phi_theta, aes(x = x)) +
-  geom_line(aes(y = elpd1), color = "#ffa600") +
-  geom_line(aes(y = elpd2), color = "#ffa600") + 
-  geom_vline(xintercept = phi_true + theta_true) +
-  geom_ribbon(aes(ymin = elpd1, ymax = elpd2), fill = "#ffa600", alpha = 0.3)
+# Case 3
+zbar <- 0; ybar <- 1.22
+phi_theta_0 <- phi_theta_mean(0, zbar, ybar, const)
+phi_theta_1 <- phi_theta_mean(1, zbar, ybar, const)
+plt_case_3 <- plot_elpd_phi_theta(phi_theta_0 - 0.03, phi_theta_1 + 0.03, zbar, ybar)
+plt_case_3
+```
 
-plt_add_theme <- function(plt){
-  plt + labs(
-    x = expression(hat(varphi)),
-    y = "ELPD"
-  ) +
-  theme(
-    axis.text.y = element_blank(),
-    panel.grid = element_blank(),
-    axis.ticks.y = element_blank()
-  )
-}
+### Grid evaluation for the optimal eta
+
+```{r}
+knitr::include_graphics("../figures/optim_eta_heatmap_phi_theta.png")
+```
+
+## Analysis for both sub-datasets
+
+```{r}
+library(plotly)
+x1 <- seq(-3, 3, length.out = 100)
+x2 <- seq(-3, 3, length.out = 100)
+grid <- as.matrix(expand.grid(x1 = x1, x2 = x2))
+
+eta <- 0.1
+y <- apply(grid, 1, elpd_joint, 0.1, const)
+
+plot_ly(x = grid[,1], y = grid[,2], z = y, type = "mesh3d", alpha = 0.3)
+```
+
+### Calculate the probability of eta between 0 and 1
+
+```{r}
+# Read result files from different grid search experiments
+fnames <- list.files("../results/", pattern = "optim_eta_2")
+df_eta_optim <- map_dfr(fnames, ~{
+  exp_name <- stringr::str_remove(strsplit(.x, "_")[[1]][4], ".rds")
+  fpath <- file.path("../results", .x)
+  df <- readRDS(fpath)
+  df$exp_name <- exp_name
+  return(df)
+})
+
+# Approximate the probabilities for each model
+df_eta_optim <- df_eta_optim %>%
+  mutate(
+    dx1 = dnorm(x1, mean = 0, sd = sqrt(4/n)),
+    dx2 = dnorm(x2, mean = 1, sd = sqrt(1/m)),
+    djoint = dx1 * dx2,
+    pref_mod = ifelse(eta == 0, "full",
+                      ifelse(eta > -3.3010, "smi", "cut"))
+  ) %>%
+  group_by(exp_name) %>%
+  mutate(djoint_adj = djoint / sum(djoint)) %>%
+  ungroup()
+
+# Calculate the probability for each model being the optimal
+df_eta_optim_sum_2 <- df_eta_optim %>%
+  group_by(exp_name, pref_mod) %>%
+  summarise(prob = sum(djoint_adj) * 100) %>%
+  ungroup() %>%
+  mutate(
+    s2t = case_when(
+      exp_name == "none" ~ 1,
+      exp_name == "original" ~ 0.5,
+      exp_name == "moderate" ~ 0.3,
+      exp_name == "strong" ~ 0.1,
+      exp_name == "extreme" ~ 0.01
+    ),
+    prob = round(prob, 2)
+  ) %>%
+  pivot_wider(names_from = pref_mod, values_from = prob) %>%
+  arrange(desc(s2t))
 ```
 
 ```{r}
-zbar <- -0.3
-ybar <- 0.8
+# Read result files from different grid search experiments
+fnames <- list.files("../results/", pattern = "optim_eta_joint")
+df_eta_optim <- map_dfr(fnames, ~{
+  exp_name <- stringr::str_remove(strsplit(.x, "_")[[1]][4], ".rds")
+  fpath <- file.path("../results", .x)
+  df <- readRDS(fpath)
+  df$exp_name <- exp_name
+  return(df)
+})
 
-theta_phi_0 <- theta_phi(0, zbar, ybar, const)
-theta_phi_1 <- theta_phi(1, zbar, ybar, const)
-x2 <- seq(theta_phi_0, theta_phi_1, length.out = 100)
-eta <- seq(0, 1, length.out = 100)
-elpd3 <- elpd_phi_theta(x2, eta, const)
-df_interp <- data.frame(x = x2, y = elpd3)
+# Approximate the probabilities for each model
+df_eta_optim <- df_eta_optim %>%
+  mutate(
+    dx1 = dnorm(x1, mean = 0, sd = sqrt(4/n)),
+    dx2 = dnorm(x2, mean = 1, sd = sqrt(1/m)),
+    djoint = dx1 * dx2,
+    pref_mod = ifelse(eta == 0, "full",
+                      ifelse(eta > -3.3010, "smi", "cut"))
+  ) %>%
+  group_by(exp_name) %>%
+  mutate(djoint_adj = djoint / sum(djoint)) %>%
+  ungroup()
 
-plt_case_1 <- plt_base + 
-  geom_rect(aes(xmin = theta_phi_1, xmax = theta_phi_1, ymin = -Inf, ymax = Inf),
-            fill = "#f1f1f1") +
-  geom_vline(xintercept = theta_phi_0, linetype = "dotted") + 
-  geom_vline(xintercept = theta_phi_1, linetype = "dotted") +
-  geom_line(data = df_interp, aes(x = x, y = y), color = "#de425b") +
-  #geom_point(x = theta_phi_0, y = elpd_phi(phi11, 1, const),
-  #           color = "#de425b",
-  #           fill = "white",
-  #           size = 2, shape = 21) +
-  scale_x_continuous(expand = c(0,0),
-                     breaks = c(theta_phi_0, theta_phi_1, 0),
-                     labels = c(expression(hat(varphi)[0]),
-                                expression(hat(varphi)[1]),
-                                expression(varphi^"*")))
-plt_case_1$layers <- c(plt_case_1$layers[[5]], plt_case_1$layers[-5])
-plt_case_1 <- plt_add_theme(plt_case_1)
-plt_case_1
+# Calculate the probability for each model being the optimal
+df_eta_optim_sum_3 <- df_eta_optim %>%
+  group_by(exp_name, pref_mod) %>%
+  summarise(prob = sum(djoint_adj) * 100) %>%
+  ungroup() %>%
+  mutate(
+    s2t = case_when(
+      exp_name == "none" ~ 1,
+      exp_name == "original" ~ 0.5,
+      exp_name == "moderate" ~ 0.3,
+      exp_name == "strong" ~ 0.1,
+      exp_name == "extreme" ~ 0.01
+    ),
+    prob = round(prob, 2)
+  ) %>%
+  pivot_wider(names_from = pref_mod, values_from = prob) %>%
+  arrange(desc(s2t))
 ```
 
+```{r}
+library(kableExtra)
 
+# Export probability tables
+df_eta_optim_sum_1 <- df_eta_optim_sum_1 %>% mutate(data = 1)
+df_eta_optim_sum_2 <- df_eta_optim_sum_2 %>% mutate(data = 2)
+df_eta_optim_sum_3 <- df_eta_optim_sum_3 %>% mutate(data = 3)
+
+# Export probability using kableExtra as latex code
+rbind(df_eta_optim_sum_1, df_eta_optim_sum_2, df_eta_optim_sum_3) %>%
+  select(data, s2t, cut, smi, full) %>%
+  kbl("latex",
+      booktabs = T,
+      label = "model-prob",
+      caption = "Approximate probabilities for the optimal model under different prior misspecifications") %>%
+  add_header_above(c(" " = 2, "Probability" = 3)) %>%
+  kableExtra::kable_styling(latex_options = c("hold_position", "striped")) %>%
+  cat()
+```

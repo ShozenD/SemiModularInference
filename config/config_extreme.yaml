@@ -1,0 +1,10 @@
+name: "extreme"
+
+experiment:
+  "n": 25
+  m: 50
+  phi_true: 0
+  theta_true: 1
+  s2z: 4
+  s2y: 1
+  s2t: 0.01
